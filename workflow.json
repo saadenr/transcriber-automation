@@ -1,0 +1,304 @@
+{
+  "name": "Meeting Transcriber — Telegram",
+  "nodes": [
+    {
+      "id": "node-01",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300],
+      "parameters": {
+        "updates": ["message"],
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "id": "node-02",
+      "name": "Has Audio?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [460, 300],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-audio",
+              "leftValue": "={{ $json.message.voice ? $json.message.voice.file_id : ($json.message.audio ? $json.message.audio.file_id : '') }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "node-03",
+      "name": "Reply No Audio",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [680, 480],
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "Envoie-moi un message vocal 🎙️",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "id": "node-04",
+      "name": "Get File Path",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/getFile",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "file_id",
+              "value": "={{ $json.message.voice ? $json.message.voice.file_id : $json.message.audio.file_id }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "node-05",
+      "name": "Download Audio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.telegram.org/file/bot{{ $env.TELEGRAM_BOT_TOKEN }}/{{ $json.result.file_path }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "data"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "node-05b",
+      "name": "Fix Extension",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1010, 300],
+      "parameters": {
+        "jsCode": "const item = $input.item;\nitem.binary.data.fileExtension = 'ogg';\nitem.binary.data.mimeType = 'audio/ogg';\nitem.binary.data.fileName = item.binary.data.fileName.replace(/\\.oga$/, '.ogg');\nreturn [item];"
+      }
+    },
+    {
+      "id": "node-06",
+      "name": "Transcribe Audio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/audio/transcriptions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.GROQ_API_KEY }}" }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "data"
+            },
+            { "name": "model", "value": "whisper-large-v3" },
+            { "name": "response_format", "value": "json" }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "node-07",
+      "name": "Has Transcript?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1340, 300],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-transcript",
+              "leftValue": "={{ $json.text }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "node-08",
+      "name": "Send Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1560, 480],
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "❌ Désolé, je n'ai pas pu transcrire l'audio. Réessaie dans quelques instants.",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "id": "node-09",
+      "name": "Prepare Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 300],
+      "parameters": {
+        "jsCode": "const transcript = $input.item.json.text;\nconst chatId = $('Telegram Trigger').item.json.message.chat.id;\n\nconst groqBody = {\n  model: 'llama-3.3-70b-versatile',\n  messages: [\n    {\n      role: 'system',\n      content: `Tu es un assistant de transcription vocal. Analyse la transcription et réponds directement sur le contenu, comme si tu avais toi-même entendu le message. Ne mentionne jamais la transcription, l'audio ou le fait que c'est un enregistrement. Ne termine jamais par une invitation à poser des questions ou une formule de politesse.`\n    },\n    {\n      role: 'user',\n      content: `${transcript}`\n    }\n  ],\n  temperature: 0.5,\n  max_tokens: 1000\n};\n\nreturn [{ json: { groqBody, chatId } }];"
+      }
+    },
+    {
+      "id": "node-10",
+      "name": "Summarize",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1780, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "=Bearer {{ $env.GROQ_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.groqBody) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "node-11",
+      "name": "Send Summary",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2000, 300],
+      "parameters": {
+        "chatId": "={{ $('Prepare Summary').item.json.chatId }}",
+        "text": "={{ $json.choices[0].message.content }}",
+        "additionalFields": {
+          "parse_mode": "None"
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [{ "node": "Has Audio?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Has Audio?": {
+      "main": [
+        [{ "node": "Get File Path", "type": "main", "index": 0 }],
+        [{ "node": "Reply No Audio", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get File Path": {
+      "main": [
+        [{ "node": "Download Audio", "type": "main", "index": 0 }]
+      ]
+    },
+    "Download Audio": {
+      "main": [
+        [{ "node": "Fix Extension", "type": "main", "index": 0 }]
+      ]
+    },
+    "Fix Extension": {
+      "main": [
+        [{ "node": "Transcribe Audio", "type": "main", "index": 0 }]
+      ]
+    },
+    "Transcribe Audio": {
+      "main": [
+        [{ "node": "Has Transcript?", "type": "main", "index": 0 }]
+      ]
+    },
+    "Has Transcript?": {
+      "main": [
+        [{ "node": "Prepare Summary", "type": "main", "index": 0 }],
+        [{ "node": "Send Error", "type": "main", "index": 0 }]
+      ]
+    },
+    "Prepare Summary": {
+      "main": [
+        [{ "node": "Summarize", "type": "main", "index": 0 }]
+      ]
+    },
+    "Summarize": {
+      "main": [
+        [{ "node": "Send Summary", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "id": "meeting-transcriber-telegram",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}
